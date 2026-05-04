@@ -2,7 +2,6 @@
  * ================================================================
  *          PID LINE FOLLOWING ROBOT
  *          Author  : Deepak K  (@Deepakk-06)
- *          Hardware: Arduino Nano | TB6612FNG | 8-CH IR Array
  *          Control : Discrete PID with anti-windup & auto-calibration
  * ================================================================
  *
