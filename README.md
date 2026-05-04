@@ -1,46 +1,33 @@
-# PID Line Following Robot
+# PID Line Following Robot — ESP32
 
-> Autonomous ground robot with 8-channel IR sensing and a real-time discrete PID controller — built, tuned, and documented from scratch.
+> Autonomous line following robot with 8-channel IR sensing, real-time discrete PID control, and live WiFi-based gain tuning — running on ESP32's dual-core architecture.
 
-This is one of the projects from my personal robotics portfolio. It started as a standard line follower and turned into a proper study of PID control, sensor calibration, and embedded optimisation on AVR hardware. Everything here — firmware, tuning, calibration logic — is hand-written and tested on real hardware.
+This is one of the projects from my personal robotics portfolio. Built entirely from scratch — firmware, PID tuning, calibration logic, and the live WiFi dashboard are all hand-written and tested on real hardware.
 
 ---
 
-## How it works
+## What makes this different from a basic line follower
 
-The robot reads 8 IR sensors mounted in a row under the chassis. Each sensor is mapped to a positional weight. The weighted average of all active sensor readings gives a signed error value — positive means the line is to the left, negative means it's to the right, zero means the robot is dead centre.
+Most line followers run everything on a single core, which means any serial logging or WiFi handling steals time from the control loop. On ESP32 the PID loop runs exclusively on Core 1 while the WiFi tuning dashboard runs independently on Core 0. The control loop never waits on anything else.
 
-```
-Sensor  :  S1   S2   S3   S4   S5   S6   S7   S8
-Weight  :  +4   +3   +2   +1   -1   -2   -3   -4
-```
-
-That error feeds into a discrete PID controller every loop iteration:
-
-```
-error      = weighted_sum(sensors) / active_sensors
-
-PID_output = (Kp × error) + (Ki × ∫error) + (Kd × Δerror)
-
-leftSpeed  = baseSpeed − PID_output
-rightSpeed = baseSpeed + PID_output
-```
-
-The differential speed correction steers the robot back onto the line. More error = more aggressive correction. The derivative term (`Kd`) is what prevents overshoot and oscillation at high speed — it resists rapid changes in error, essentially predicting where the error is heading and counteracting it before it gets worse.
+The other big thing is live tuning. Instead of changing a value in code, reflashing, and running again — you connect your phone to the robot's WiFi hotspot and adjust Kp, Kd, Ki, and speed from a browser while the robot is actually moving on the track. This cuts tuning time dramatically.
 
 ---
 
 ## Features
 
+- Full PID control loop — proportional, integral, derivative
 - 8-channel IR sensor array with per-sensor adaptive calibration
-- Full PID loop — proportional, integral, and derivative terms
-- Anti-windup clamp on the integrator (`±500`)
-- Integrator resets to zero on line loss to prevent accumulated error
-- Bidirectional calibration sweep — handles any lighting condition
-- Smooth speed ramp from standstill to cruise (no wheel slip on start)
-- Coast-to-stop motor behaviour — less mechanical stress at high speed
-- Line-loss recovery using directional memory from last valid error
-- Configurable for black-on-white or white-on-black tracks
+- Weighted sensor averaging for smooth continuous error signal
+- **Dual-core execution** — PID on Core 1, WiFi on Core 0
+- **Live browser tuning dashboard** — adjust gains without reflashing
+- Anti-windup clamp on integrator (±500)
+- Integrator resets to zero on line loss
+- Bidirectional calibration sweep for any lighting condition
+- Smooth speed ramp from standstill to cruise
+- Coast-to-stop motor behaviour
+- Line-loss recovery using last known error direction
+- Black-on-white or white-on-black configurable
 
 ---
 
@@ -48,126 +35,106 @@ The differential speed correction steers the robot back onto the line. More erro
 
 | Component | Part |
 |---|---|
-| Microcontroller | Arduino Nano (ATmega328P) |
+| Microcontroller | ESP32 DevKit V1 (dual-core, 240 MHz) |
 | Motor Driver | TB6612FNG Dual H-Bridge |
-| Sensor Array | 8× IR analog sensors (A0–A7) |
-| Drive Motors | 2× DC gear motors |
-| Button 1 (Pin 11) | Trigger calibration |
-| Button 2 (Pin 12) | Start run |
-| LED (Pin 13) | On-line indicator |
+| Sensor Array | 8x IR analog sensors |
+| Drive Motors | 2x DC gear motors |
+| Button 1 (GPIO 18) | Trigger calibration |
+| Button 2 (GPIO 19) | Start run |
+| LED (GPIO 2) | On-line indicator (onboard) |
 
 ---
 
 ## Wiring
 
-```
-TB6612FNG
-  AIN1 → D4    AIN2 → D3    PWMA → D9
-  BIN1 → D6    BIN2 → D7    PWMB → D10
-  STBY → D5
+---
 
-IR Sensors  →  A0 to A7  (left to right across chassis)
-Button 1    →  D11  (INPUT_PULLUP)
-Button 2    →  D12  (INPUT_PULLUP)
-LED         →  D13
-```
+## Live WiFi Tuning
+
+On boot the ESP32 creates a WiFi access point:
+Connect from your phone or laptop, open the URL, and you get a live dashboard with sliders for Kp, Kd, Ki, and top speed. Hit Apply and the values update instantly on the running robot — no stopping, no reflashing.
 
 ---
 
-## PID Parameters
+## Dual-Core Architecture
+Gains are declared volatile so both cores read and write them safely without race conditions.
+
+---
+
+## PID Control System
+### Sensor Weighting
+### Tuned Parameters
 
 | Gain | Value | Effect |
 |---|---|---|
-| `Kp` | `0.13` | Steering force proportional to current error |
-| `Kd` | `0.40` | Damping — counteracts rapid error change, kills oscillation |
-| `Ki` | `0.0005` | Eliminates residual steady-state drift on long straights |
-| `lfSpeed` | `220` | Cruise speed (out of 255 PWM) |
-| `currentSpeed` | `60` | Start speed — increments to `lfSpeed` each iteration |
+| Kp | 0.13 | Steering strength per unit of error |
+| Kd | 0.40 | Damping — kills oscillation at high speed |
+| Ki | 0.0005 | Eliminates residual drift on long straights |
+| lfSpeed | 220 | Cruise speed (0-255 PWM) |
+| Start Speed | 60 | Ramps up each iteration — no wheel slip |
 
 ---
 
-## Running the robot
+## ESP32-Specific Implementation Notes
 
-1. Flash `PID_LineFollower.ino` to the Arduino
-2. Place the robot centred on the line
-3. Press **Button 1** — the robot sweeps right then left (~10 seconds) to calibrate all 8 sensors against the current lighting
-4. Press **Button 2** — it starts following
+**PWM** — ESP32 has no analogWrite(). Motor speed is controlled via the LEDC peripheral using ledcWrite(), configured at 1 kHz / 8-bit resolution.
 
-Open Serial Monitor at `115200` baud to see calibration thresholds printed per sensor. If any threshold looks wrong (near 0 or near 1023), that sensor likely didn't cross both the line and background during calibration — redo it.
+**ADC** — ESP32 ADC is 12-bit (0-4095). Sensor values are mapped to 0-1000 to keep them consistent with the PID weight scale.
 
----
+**ADC2 / WiFi conflict** — ESP32's ADC2 pins are disabled when WiFi is active. All 8 sensor pins are assigned to ADC1 in the firmware to avoid this.
 
-## Tuning guide
-
-**Robot oscillates (wobbles side to side)**
-Raise `Kd` first — try `0.45`, then `0.50`. If that's not enough, pull `Kp` down slightly to `0.11`.
-
-**Slow reaction on sharp corners**
-Raise `Kp` to `0.15`. Also check `lfSpeed` isn't too fast for the track's corner radius.
-
-**Drifts on straight sections**
-Raise `Ki` slightly — `0.001` is a safe next step.
-
-**Too slow overall**
-Push `lfSpeed` toward `240`. Raise starting `currentSpeed` to `80`.
-
-**Loses line on tight inside corners**
-Increase the recovery spin value in `loop()` — currently `80`, try `100–120`.
+**Dual core** — The WiFi server task is pinned to Core 0 using xTaskCreatePinnedToCore(). Core 1 runs the control loop with no interference.
 
 ---
 
-## Calibration logic
+## How to Run
 
-Before every run the robot does a bidirectional sweep — spinning right for 5000 iterations, then left for 5000 more — while continuously updating the per-sensor min and max. The threshold for each sensor is `(min + max) / 2`.
-
-This approach accounts for the fact that not all sensors have identical sensitivity and that IR reflectivity varies significantly between surfaces, print materials, and ambient lighting. A single global threshold would misclassify sensors at the edges of the array. Per-sensor thresholds eliminate that entirely.
-
----
-
-## Firmware architecture
-
-```
-loop()
- ├── readLine()          normalise ADC → 0–1000, set sensorArray[]
- ├── lineFollow()        compute PID, set motor speeds
- │    ├── weighted error from sensorArray[]
- │    ├── P, I (clamped), D terms
- │    └── motor1run() / motor2run()
- └── recovery logic      spin toward last known error on line loss
-
-calibrate()
- ├── updateCalibration() sample all sensors, track min/max
- └── compute threshold[] = (min + max) / 2 per sensor
-```
+1. Install ESP32 board package in Arduino IDE
+   - File -> Preferences -> add https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+   - Tools -> Board -> ESP32 Dev Module
+2. Flash PID_LineFollower_ESP32.ino
+3. Open Serial Monitor at 115200 baud
+4. Place robot on line -> press Button 1 -> calibration sweep (~10 sec)
+5. Press Button 2 -> robot starts following
+6. Connect phone to PID-LineFollower WiFi -> open http://192.168.4.1 -> tune live
 
 ---
 
-## Repository
+## Tuning Guide
 
-```
-PID-Line-Following-Robot/
-├── PID_LineFollower.ino    main Arduino sketch
-└── README.md               this file
-```
+**Oscillating at speed** — raise Kd first, try 0.45 then 0.50
 
----
+**Slow on sharp corners** — raise Kp to 0.15
 
-## Skills involved
+**Drifting on straights** — raise Ki to 0.001
 
-- Embedded C++ on AVR (ATmega328P)
-- Discrete PID controller design and manual tuning
-- ADC prescaler optimisation for faster sensor sampling
-- 8-channel analog sensor array interfacing and normalisation
-- H-bridge motor driver control (direction + PWM)
-- Iterative hardware debugging and parameter tuning on physical robot
+**Too slow overall** — push lfSpeed to 240, raise start speed to 80
+
+**Loses line on tight corners** — increase recovery spin from 80 to 110
 
 ---
 
-## About this project
+## Project Structure
+---
 
-I built this to get a solid understanding of closed-loop control on constrained hardware. The interesting part wasn't the line following itself — it was figuring out why the robot oscillated at high speed, what role each PID term actually played, and how to make calibration reliable across different tracks and lighting setups.
+## Skills Demonstrated
 
-If you're working on something similar and want to talk through tuning or sensor setup, feel free to open an issue or reach out.
+- Embedded C++ on ESP32 (Xtensa dual-core, FreeRTOS)
+- Discrete PID controller design and iterative hardware tuning
+- FreeRTOS task creation and core pinning (xTaskCreatePinnedToCore)
+- ESP32 LEDC PWM peripheral configuration
+- WiFi AP mode and HTTP web server on embedded hardware
+- 12-bit ADC interfacing and per-sensor normalisation
+- TB6612FNG H-bridge motor driver control
+- Volatile shared state between concurrent RTOS tasks
+
+---
+
+## About
+
+I built this to get a deep understanding of closed-loop control on real constrained hardware. The interesting problems were figuring out why the robot oscillated at high speed, isolating the control loop from WiFi interference using dual-core task pinning, and dealing with ESP32's ADC2/WiFi hardware conflict. The live tuning dashboard made the whole iteration cycle significantly faster compared to reflashing for every parameter change.
+
+If you're working on something similar or want to talk through the dual-core setup or PID tuning, feel free to open an issue or reach out.
 
 ---
 
